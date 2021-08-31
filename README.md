@@ -1,29 +1,35 @@
-# README #
+# To Deploy
 
-This README would normally document whatever steps are necessary to get your application up and running.
+Ensure aws-cdk is installed and bootstrapped. It is important that the aws-cdk cli version matches the cdk dependencies
+defined in the `package.json` file. 
 
-### What is this repository for? ###
+In the `cdk bootstrap` phase a S3 bucket is created that will hold the created Cloud Formation templates. 
 
-* Quick summary
-* Version
-* [Learn Markdown](https://bitbucket.org/tutorials/markdowndemo)
+```bash
+$ npm install -g aws-cdk
+$ cdk bootstrap
+```
 
-### How do I get set up? ###
+Before the changes are rolled out, check the generated Cloud Formation Template: 
 
-* Summary of set up
-* Configuration
-* Dependencies
-* Database configuration
-* How to run tests
-* Deployment instructions
+```bash
+$ PROJECT_NAME=<projectName> cdk synth
+```
 
-### Contribution guidelines ###
+Then build and deploy either the whole application:
 
-* Writing tests
-* Code review
-* Other guidelines
+```bash
+$ PROJECT_NAME=<projectName> cdk deploy
+```
 
-### Who do I talk to? ###
+or single stacks:
 
-* Repo owner or admin
-* Other community or team contact
+```bash
+$ cdk deploy exampleUserStack
+```
+
+In the end destroy the stack:
+
+```bash
+$ cdk destroy
+```
