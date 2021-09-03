@@ -1,0 +1,13 @@
+debug: false
+spring:
+  application:
+    name: json-integration
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    name: postgres
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: com.jackis.jsonintegration.hibernate.CustomPostgreSQL95Dialect

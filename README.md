@@ -26,6 +26,7 @@ or single stacks:
 
 ```bash
 $ cdk deploy exampleUserStack
+$ cdk deploy artifactRepoStack
 ```
 
 In the end destroy the stack:

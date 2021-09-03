@@ -24,9 +24,15 @@
     "typescript": "~3.9.7"
   },
   "dependencies": {
+    "@aws-cdk/aws-codeartifact": "1.120.0",
+    "@aws-cdk/aws-codebuild": "1.120.0",
     "@aws-cdk/aws-codecommit": "1.120.0",
+    "@aws-cdk/aws-codepipeline": "1.120.0",
+    "@aws-cdk/aws-codepipeline-actions": "1.120.0",
     "@aws-cdk/aws-iam": "1.120.0",
+    "@aws-cdk/aws-logs": "1.120.0",
     "@aws-cdk/core": "1.120.0",
+    "@cloudcomponents/cdk-pull-request-approval-rule": "1.40.1",
     "config": "3.3.6",
     "source-map-support": "^0.5.16"
   }
