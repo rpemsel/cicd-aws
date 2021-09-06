@@ -14,6 +14,24 @@
 	<name>jsonb-integration</name>
 	<description>Demo project to show how to integrate JSONB fields into Hibernate and Spring boot</description>
 
+	<repositories>
+		<repository>
+			<id>orgRepo</id>
+			<name>Organisation Repo</name>
+			<url>https://development-artifact-repo-627739073141.d.codeartifact.eu-central-1.amazonaws.com/maven/development-artifact-repo</url>
+		</repository>
+	</repositories>
+
+	<distributionManagement>
+		<repository>
+			<uniqueVersion>false</uniqueVersion>
+			<id>orgRepo</id>
+			<name>Organisation Repository</name>
+			<url>https://development-artifact-repo-627739073141.d.codeartifact.eu-central-1.amazonaws.com/maven/development-artifact-repo</url>
+			<layout>default</layout>
+		</repository>
+	</distributionManagement>
+
 	<properties>
 		<java.version>11</java.version>
 		<postgres.testcontainers.version>1.12.3</postgres.testcontainers.version>
