@@ -10,7 +10,9 @@ phases:
     commands:
       - cp ./cicd/settings.xml ~/.m2/
       - export CODEARTIFACT_AUTH_TOKEN=`aws codeartifact get-authorization-token --domain development-artifact-repo --domain-owner 627739073141 --query authorizationToken --output text` && sed -i "s/env.CODEARTIFACT_AUTH_TOKEN/$CODEARTIFACT_AUTH_TOKEN/g" ~/.m2/settings.xml
-      - cat ~/.m2/settings.xml
   build:
     commands:
       - mvn install
+  post_build:
+    commands:
+      - mvn deploy -DskipTests
