@@ -1,17 +1,15 @@
 import * as cdk from "@aws-cdk/core"
 import {Duration} from "@aws-cdk/core"
-import * as codecommit from '@aws-cdk/aws-codecommit'
-import {
-    ApprovalRuleTemplate,
-    ApprovalRuleTemplateRepositoryAssociation
-} from "@cloudcomponents/cdk-pull-request-approval-rule";
 import {BuildSpec, ComputeType, FileSystemLocation, LinuxBuildImage, PipelineProject} from "@aws-cdk/aws-codebuild";
 import {LogGroup, LogRetention, RetentionDays} from "@aws-cdk/aws-logs";
-import {Artifact, Pipeline} from "@aws-cdk/aws-codepipeline";
-import {CodeBuildAction, CodeCommitSourceAction, CodeCommitTrigger} from "@aws-cdk/aws-codepipeline-actions";
-import {Effect, PolicyDocument, PolicyStatement, Role, ServicePrincipal} from "@aws-cdk/aws-iam";
+import {Effect, ManagedPolicy, PolicyDocument, PolicyStatement, Role, ServicePrincipal} from "@aws-cdk/aws-iam";
 import {FileSystem, PerformanceMode} from "@aws-cdk/aws-efs";
 import {Peer, Port, SecurityGroup, Vpc} from "@aws-cdk/aws-ec2";
+import {NodejsFunction} from "@aws-cdk/aws-lambda-nodejs";
+import {LambdaRestApi} from "@aws-cdk/aws-apigateway";
+import * as path from "path";
+import {CfnConnection} from "@aws-cdk/aws-codestarconnections";
+import {Bucket} from "@aws-cdk/aws-s3";
 
 export interface ProjectCicdStackProps extends cdk.StackProps {
     projectName: string,
@@ -27,32 +25,7 @@ export class ProjectCicdStack extends cdk.Stack {
         const dashedProjectName = props.projectName.replace(/\s/, '-')
         const underScoreProjectName = props.projectName.replace(/\s/, '_')
 
-        const repository = new codecommit.Repository(this, 'Repository', {
-            repositoryName: dashedProjectName,
-            description: 'Repo for Spring JSON Integration.'
-        });
-
-        const {approvalRuleTemplateName} = new ApprovalRuleTemplate(
-            this,
-            'ApprovalRuleTemplate',
-            {
-                approvalRuleTemplateName: `${dashedProjectName}-template`,
-                template: {
-                    approvers: {
-                        numberOfApprovalsNeeded: 1,
-                    },
-                },
-            },
-        );
-
-        new ApprovalRuleTemplateRepositoryAssociation(
-            this,
-            'ApprovalRuleTemplateRepositoryAssociation',
-            {
-                approvalRuleTemplateName,
-                repository,
-            },
-        );
+        const artifactBucket = new Bucket(this, 'artifactBucket', {})
 
         const logGroupBuild = LogGroup.fromLogGroupName(this, 'build-log-group', `${dashedProjectName}-logGroup`)
         new LogRetention(this, 'build-log-retention', {
@@ -80,12 +53,18 @@ export class ProjectCicdStack extends cdk.Stack {
                         new PolicyStatement(
                             {
                                 actions: [
+                                    'codeartifact:DescribePackageVersion',
+                                    'codeartifact:GetPackageVersionAsset',
+                                    'codeartifact:GetPackageVersionReadme',
+                                    'codeartifact:ListPackageVersionAssets',
+                                    'codeartifact:ListPackageVersionDependencies',
+                                    'codeartifact:ListPackageVersions',
                                     'codeartifact:PublishPackageVersion',
                                     'codeartifact:PutPackageMetadata',
-                                    'codeartifact:ReadFromRepository'
+                                    'codeartifact:UpdatePackageVersionsStatus'
                                 ],
                                 effect: Effect.ALLOW,
-                                resources: [`arn:aws:codeartifact:${this.region}:${this.account}:repository/${props.codeArtifactDomain}/${props.codeArtifactRepository}/*`]
+                                resources: [`arn:aws:codeartifact:${this.region}:${this.account}:package/${props.codeArtifactDomain}/${props.codeArtifactRepository}/*`]
                             }
                         ),
                         new PolicyStatement({
@@ -95,7 +74,21 @@ export class ProjectCicdStack extends cdk.Stack {
                             ],
                             effect: Effect.ALLOW,
                             resources: [`arn:aws:codeartifact:${this.region}:${this.account}:repository/${props.codeArtifactDomain}/${props.codeArtifactRepository}`]
-                        })]
+                        }),
+                        new PolicyStatement({
+                            actions: [
+                                's3:ListBucket'
+                            ],
+                            effect: Effect.ALLOW,
+                            resources: [artifactBucket.bucketArn]
+                        }),
+                        new PolicyStatement({
+                            actions: [
+                                's3:*Object*',
+                            ],
+                            effect: Effect.ALLOW,
+                            resources: [`${artifactBucket.bucketArn}/*`]
+                        })],
                 })
             }
         })
@@ -146,30 +139,101 @@ export class ProjectCicdStack extends cdk.Stack {
             queuedTimeout: Duration.minutes(10),
         })
 
-        const sourceAction = new CodeCommitSourceAction({
-            actionName: 'Git-Checkout',
-            repository: repository,
-            trigger: CodeCommitTrigger.EVENTS,
-            output: new Artifact('sourceCode')
+        const bitbucketConnection = new CfnConnection(this, 'bitbucketConnection', {
+            connectionName: `${dashedProjectName}`,
+            providerType: 'Bitbucket'
         })
 
-        new Pipeline(this, 'code-pipeline', {
-            crossAccountKeys: false,
-            pipelineName: `${underScoreProjectName}_pipeline`,
-            restartExecutionOnUpdate: false,
-            stages: [
-                {
-                    stageName: 'git-checkout',
-                    actions: [sourceAction]
-                },
-                {
-                    stageName: 'build',
-                    actions: [new CodeBuildAction({
-                        actionName: 'build',
-                        project: codebuildPipeline,
-                        input: sourceAction.actionProperties.outputs[0]
+        const buildPipelineRole = new Role(this, 'pipelineIamRole', {
+            roleName: `CodePipelineRole`,
+            description: `Provides permissions for running code pipelines`,
+            assumedBy: new ServicePrincipal('codepipeline.amazonaws.com'),
+            inlinePolicies: {
+                codestarConnectionPolicy: new PolicyDocument({
+                    statements: [new PolicyStatement({
+                        actions: [
+                            'codestar-connections:GetConnection',
+                            'codestar-connections:UseConnection',
+                            'codestar-connections:PassConnection'
+                        ],
+                        resources: [
+                            bitbucketConnection.attrConnectionArn
+                        ],
+
                     })]
-                }]
+                })
+            },
+            managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('AWSCodePipelineFullAccess'),
+                ManagedPolicy.fromAwsManagedPolicyName('AWSCodeCommitFullAccess'),
+                ManagedPolicy.fromAwsManagedPolicyName('AWSCodeBuildDeveloperAccess'),
+                ManagedPolicy.fromAwsManagedPolicyName('AmazonS3FullAccess')],
+            path: '/'
+        })
+
+        const pipelineCreationLambdaRole = new Role(this, 'pipelineCreationLambdaRole', {
+            roleName: `PipelineCreationLambdaRole`,
+            description: `Provides permissions for creating a code pipeline`,
+            assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+            inlinePolicies: {
+                codestarConnectionPolicy: new PolicyDocument({
+                    statements: [new PolicyStatement({
+                        actions: [
+                            'codestar-connections:GetConnection',
+                            'codestar-connections:ListConnections',
+                            'codestar-connections:PassConnection'
+                        ],
+                        resources: [
+                            bitbucketConnection.attrConnectionArn
+                        ],
+
+                    })]
+                })
+            },
+            managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('AWSLambda_FullAccess'),
+                ManagedPolicy.fromAwsManagedPolicyName('AWSCloudFormationFullAccess'),
+                ManagedPolicy.fromAwsManagedPolicyName('AWSCodePipelineFullAccess'),
+                ManagedPolicy.fromManagedPolicyArn(this, 'AWSLambdaBasicExecutionRole', 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole')],
+            path: '/'
+        })
+
+
+        const pipelineCreationLambda = new NodejsFunction(this, 'pipelineCreationLambda', {
+            functionName: 'PipelineCreation',
+            description: 'Creates CodePipelines if new git branches are created',
+            role: pipelineCreationLambdaRole,
+            awsSdkConnectionReuse: true,
+            environment: {
+                CONNECTION_ARN: bitbucketConnection.attrConnectionArn,
+                PIPELINE_ROLE_ARN: buildPipelineRole.roleArn,
+                S3_BUCKET_ARTIFACT_STORE: artifactBucket.bucketName,
+                BUILD_PROJECT_NAME: codebuildPipeline.projectName
+            },
+            entry: path.join(__dirname, '../resources/pipeline-creation-lambda/index.ts'),
+            handler: 'main',
+            bundling: {
+                minify: true,
+                externalModules: ['aws-sdk'],
+                forceDockerBundling: true,
+                commandHooks: {
+                    beforeInstall(inputDir: string, outputDir: string): string[] {
+                        return []
+                    },
+                    beforeBundling(inputDir: string, outputDir: string): string[] {
+                        return []
+                    },
+                    afterBundling(inputDir: string, outputDir: string): string[] {
+                        return [`cp ${inputDir}/resources/pipeline-creation-lambda/cloudformation/codepipeline.template.yaml ${outputDir}`];
+                    }
+                }
+            },
+            logRetention: RetentionDays.FIVE_DAYS,
+            timeout: Duration.minutes(3)
+        })
+
+        const lambdaApiGateway = new LambdaRestApi(this, 'webhookApi', {
+            restApiName: 'WebhookApi',
+            handler: pipelineCreationLambda,
+            deploy: true
         })
     }
 }

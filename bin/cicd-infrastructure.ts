@@ -15,7 +15,7 @@ const vpcStack = new VpcStack(app, 'vpcStack', {
 })
 const artifactStack = new ArtifactRepoStack(app, 'artifactRepoStack', {})
 const cicdStack = new ProjectCicdStack(app, 'cicdStack', {
-    projectName: process.env.PROJECT_NAME || '',
+    projectName: process.env.PROJECT_NAME || 'integration',
     codeArtifactDomain: artifactStack.domainName,
     codeArtifactRepository: artifactStack.repoName,
     vpc: vpcStack.vpc,
