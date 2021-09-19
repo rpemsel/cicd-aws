@@ -10,11 +10,14 @@ import {LambdaRestApi} from "@aws-cdk/aws-apigateway";
 import * as path from "path";
 import {CfnConnection} from "@aws-cdk/aws-codestarconnections";
 import {Bucket} from "@aws-cdk/aws-s3";
+import {Topic} from "@aws-cdk/aws-sns";
+import {EmailSubscription} from "@aws-cdk/aws-sns-subscriptions";
 
 export interface ProjectCicdStackProps extends cdk.StackProps {
     projectName: string,
     codeArtifactDomain: string,
     codeArtifactRepository: string,
+    notificationEmailAddress?: string,
     vpc: Vpc
 }
 
@@ -136,8 +139,16 @@ export class ProjectCicdStack extends cdk.Stack {
             vpc: props.vpc,
             subnetSelection: {subnets: [props.vpc.privateSubnets[0]]},
             timeout: Duration.minutes(20),
-            queuedTimeout: Duration.minutes(10),
+            queuedTimeout: Duration.minutes(10)
         })
+
+        if (props.notificationEmailAddress) {
+            const snsNotificationTopic = new Topic(this, 'buildFailTopic', {
+                displayName: `${dashedProjectName}BuildFailedTopic`
+            })
+            snsNotificationTopic.addSubscription(new EmailSubscription(props.notificationEmailAddress))
+            codebuildPipeline.notifyOnBuildFailed('triggerFailedBuild', snsNotificationTopic)
+        }
 
         const bitbucketConnection = new CfnConnection(this, 'bitbucketConnection', {
             connectionName: `${dashedProjectName}`,

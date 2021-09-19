@@ -10,6 +10,14 @@ $ npm install -g aws-cdk
 $ cdk bootstrap
 ```
 
+The following environment parameters must be set: 
+
+
+| Name | Description | Example Value |
+|---|---|---|
+|PROJECT_NAME| The name of the project do provision| cicdProject |
+|NOTIFICATION_EMAIL| An email address to which a notification about a failed build will be send. The variable is only required if `PROJECT_NAME` is set to `cicdProject` | john@doe.com |
+
 Before the changes are rolled out, check the generated Cloud Formation Template: 
 
 ```bash

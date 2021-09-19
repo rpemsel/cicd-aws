@@ -23,6 +23,7 @@ const cicdStack = new ProjectCicdStack(app, 'cicdStack', {
         region: process.env.CDK_DEFAULT_REGION,
         account: process.env.CDK_DEFAULT_ACCOUNT,
     },
+    notificationEmailAddress: process.env.NOTIFICATION_EMAIL
 })
 
 cicdStack.addDependency(artifactStack, 'Adds a Maven repository')
