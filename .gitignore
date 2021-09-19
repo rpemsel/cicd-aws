@@ -51,3 +51,4 @@ Thumbs.db
 *.d.ts
 *.js
 /cdk.out/.cache/
+cdk.out/
