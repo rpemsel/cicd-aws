@@ -4,8 +4,8 @@ import {CfnDomain, CfnRepository} from "@aws-cdk/aws-codeartifact";
 
 export class ArtifactRepoStack extends cdk.Stack {
 
-    private _repoName: string = 'development-artifact-repo'
-    private _domainName: string = 'development-artifact-repo'
+    private _repoName: string = 'artifact-repo'
+    private _domainName: string = 'artifact-repo'
 
     constructor(scope: cdk.Construct, id: string, props: StackProps) {
         super(scope, id, props);

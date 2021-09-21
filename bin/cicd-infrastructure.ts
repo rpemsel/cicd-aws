@@ -1,11 +1,9 @@
 import * as cdk from '@aws-cdk/core';
 import {ProjectCicdStack} from "../lib/project-cicd.stack";
-import {ExampleUserStack} from "../lib/example-user.stack";
 import {ArtifactRepoStack} from "../lib/artifact-repo.stack";
 import {VpcStack} from "../lib/vpc.stack";
 
 const app = new cdk.App();
-const exampleUserStack = new ExampleUserStack(app, 'exampleUserStack', {})
 const vpcStack = new VpcStack(app, 'vpcStack', {
     cidrRange: '10.0.0.0/21',
     env: {

@@ -30,9 +30,15 @@ export class ProjectCicdStack extends cdk.Stack {
 
         const artifactBucket = new Bucket(this, 'artifactBucket', {})
 
-        const logGroupBuild = LogGroup.fromLogGroupName(this, 'build-log-group', `${dashedProjectName}-logGroup`)
+        const logGroupBuild = LogGroup.fromLogGroupName(this, 'build-log-group', `${dashedProjectName}-build-logGroup`)
         new LogRetention(this, 'build-log-retention', {
             logGroupName: logGroupBuild.logGroupName,
+            retention: RetentionDays.FIVE_DAYS
+        })
+
+        const logGroupDeployment = LogGroup.fromLogGroupName(this, 'deployment-log-group', `${dashedProjectName}-deployment-logGroup`)
+        new LogRetention(this, 'deployment-log-retention', {
+            logGroupName: logGroupDeployment.logGroupName,
             retention: RetentionDays.FIVE_DAYS
         })
 
@@ -114,7 +120,7 @@ export class ProjectCicdStack extends cdk.Stack {
             securityGroup: mvnSecurityGroup
         })
 
-        const codebuildPipeline = new PipelineProject(this, 'build-pipeline', {
+        const buildPipeline = new PipelineProject(this, 'build-pipeline', {
             projectName: `${underScoreProjectName}_build`,
             description: `${dashedProjectName} Build Pipeline`,
             buildSpec: BuildSpec.fromSourceFilename('./cicd/buildspec.yml'),
@@ -142,12 +148,36 @@ export class ProjectCicdStack extends cdk.Stack {
             queuedTimeout: Duration.minutes(10)
         })
 
+        const deploymentPipeline = new PipelineProject(this, 'deployment-pipeline', {
+            projectName: `${underScoreProjectName}_deployment`,
+            description: `${dashedProjectName} Deployment Pipeline`,
+            buildSpec: BuildSpec.fromSourceFilename('./cicd/deployspec.yml'),
+            role: buildIamRole,
+            environment: {
+                buildImage: LinuxBuildImage.STANDARD_5_0,
+                privileged: true,
+                computeType: ComputeType.SMALL
+            },
+            logging: {
+                cloudWatch: {
+                    enabled: true,
+                    prefix: `${dashedProjectName}`,
+                    logGroup: logGroupDeployment
+                }
+            },
+            vpc: props.vpc,
+            subnetSelection: {subnets: [props.vpc.privateSubnets[0]]},
+            timeout: Duration.minutes(20),
+            queuedTimeout: Duration.minutes(10)
+        })
+
         if (props.notificationEmailAddress) {
             const snsNotificationTopic = new Topic(this, 'buildFailTopic', {
                 displayName: `${dashedProjectName}BuildFailedTopic`
             })
             snsNotificationTopic.addSubscription(new EmailSubscription(props.notificationEmailAddress))
-            codebuildPipeline.notifyOnBuildFailed('triggerFailedBuild', snsNotificationTopic)
+            buildPipeline.notifyOnBuildFailed('triggerFailedBuild', snsNotificationTopic)
+            deploymentPipeline.notifyOnBuildFailed('triggerFailedDeployment', snsNotificationTopic)
         }
 
         const bitbucketConnection = new CfnConnection(this, 'bitbucketConnection', {
@@ -217,7 +247,8 @@ export class ProjectCicdStack extends cdk.Stack {
                 CONNECTION_ARN: bitbucketConnection.attrConnectionArn,
                 PIPELINE_ROLE_ARN: buildPipelineRole.roleArn,
                 S3_BUCKET_ARTIFACT_STORE: artifactBucket.bucketName,
-                BUILD_PROJECT_NAME: codebuildPipeline.projectName
+                BUILD_PROJECT_NAME: buildPipeline.projectName,
+                DEPLOYMENT_PROJECT_NAME: deploymentPipeline.projectName
             },
             entry: path.join(__dirname, '../resources/pipeline-creation-lambda/index.ts'),
             handler: 'main',

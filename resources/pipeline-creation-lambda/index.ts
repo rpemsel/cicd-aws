@@ -53,6 +53,10 @@ export const main = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxy
                         {
                             ParameterKey: 'CodeBuildProjectNameParameter',
                             ParameterValue: process.env.BUILD_PROJECT_NAME
+                        },
+                        {
+                            ParameterKey: 'DeploymentProjectNameParameter',
+                            ParameterValue: process.env.DEPLOYMENT_PROJECT_NAME
                         }
                     ]
                 }))

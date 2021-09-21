@@ -10,7 +10,9 @@
     "test": "npm run lint & jest",
     "cdk": "cdk --version",
     "lint": "eslint . --ext .ts",
-    "deploy": "cdk deploy --require-approval never"
+    "synth": "cdk synth",
+    "deploy": "cdk deploy --require-approval never",
+    "destroy": "cdk destroy"
   },
   "devDependencies": {
     "@aws-cdk/assert": "1.122.0",
