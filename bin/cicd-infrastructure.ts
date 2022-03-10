@@ -16,6 +16,8 @@ const cicdStack = new ProjectCicdStack(app, 'cicdStack', {
     projectName: process.env.PROJECT_NAME || 'integration',
     codeArtifactDomain: artifactStack.domainName,
     codeArtifactRepository: artifactStack.repoName,
+    githubRepo: process.env.GITHUB_REPO,
+    githubOwner: process.env.GITHUB_OWNER,
     vpc: vpcStack.vpc,
     env: {
         region: process.env.CDK_DEFAULT_REGION,

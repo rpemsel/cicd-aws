@@ -9,7 +9,7 @@ infrastructure is provisioned using AWS CDK.
 
 The following stacks are included in the project
 
-* **vpcStack**: a stac creating a VPC with private and public subnets that hosts the infrastructure for the CICD platform
+* **vpcStack**: a stack creating a VPC with private and public subnets that hosts the infrastructure for the CICD platform
 * **artifactRepoStack**: An artifact repository in which build Maven artifacts are put into
 * **cicdStack**: A stack containing of elements required to provide a CICD platform based on the AWS supplied products. The CICD stack depends on the other stacks included in this repository
 
@@ -28,10 +28,12 @@ $ cdk bootstrap
 The following environment parameters must be set before other commands are run: 
 
 
-| Name | Description | Example Value |
-|---|---|---|
-|PROJECT_NAME| The name of the project do provision| cicdProject |
-|NOTIFICATION_EMAIL| An email address to which a notification about a failed build will be send. The variable is only required if `PROJECT_NAME` is set to `cicdProject` | john@doe.com |
+| Name | Description                                                                                                                                                                                                       | Example Value |
+|---|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---|
+|PROJECT_NAME| The name of the project to provision                                                                                                                                                                              | cicdProject |
+|NOTIFICATION_EMAIL| An email address to which a notification about a failed build will be send. The variable is only required if `PROJECT_NAME` is set to `cicdProject`                                                               | john@doe.com |
+|GITHUB_REPO| The name of the Github repo to which to connect to with OAuth2 in order to trigger a build on a change to the repository. The repo name can be extracted from the Github URL: `https://github.com/<owner>/<repo>` | JSONB-integration.git |
+|GITHUB_OWNER| The Github user can be extracted from the Github URL: `https://github.com/<owner>/<repo>`                                                                                                                         | john_doe |
 
 Before the changes are rolled out, check the generated Cloud Formation Template: 
 

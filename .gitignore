@@ -52,3 +52,4 @@ Thumbs.db
 *.js
 /cdk.out/.cache/
 cdk.out/
+/cdk.context.json

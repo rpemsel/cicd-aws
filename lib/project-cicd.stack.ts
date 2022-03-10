@@ -1,20 +1,29 @@
 import * as cdk from "@aws-cdk/core"
-import {Duration} from "@aws-cdk/core"
-import {BuildSpec, ComputeType, FileSystemLocation, LinuxBuildImage, PipelineProject} from "@aws-cdk/aws-codebuild";
+import {Duration, RemovalPolicy} from "@aws-cdk/core"
+import {
+    Artifacts,
+    BuildEnvironmentVariable,
+    BuildEnvironmentVariableType,
+    BuildSpec,
+    ComputeType,
+    FileSystemLocation,
+    LinuxBuildImage,
+    Project,
+    Source
+} from "@aws-cdk/aws-codebuild";
+import { Secret } from "@aws-cdk/aws-secretsmanager";
 import {LogGroup, LogRetention, RetentionDays} from "@aws-cdk/aws-logs";
-import {Effect, ManagedPolicy, PolicyDocument, PolicyStatement, Role, ServicePrincipal} from "@aws-cdk/aws-iam";
+import {Effect, PolicyDocument, PolicyStatement, Role, ServicePrincipal} from "@aws-cdk/aws-iam";
 import {FileSystem, PerformanceMode} from "@aws-cdk/aws-efs";
 import {Peer, Port, SecurityGroup, Vpc} from "@aws-cdk/aws-ec2";
-import {NodejsFunction} from "@aws-cdk/aws-lambda-nodejs";
-import {LambdaRestApi} from "@aws-cdk/aws-apigateway";
-import * as path from "path";
-import {CfnConnection} from "@aws-cdk/aws-codestarconnections";
-import {Bucket} from "@aws-cdk/aws-s3";
 import {Topic} from "@aws-cdk/aws-sns";
 import {EmailSubscription} from "@aws-cdk/aws-sns-subscriptions";
+import { BlockPublicAccess, Bucket, BucketEncryption } from "@aws-cdk/aws-s3";
 
 export interface ProjectCicdStackProps extends cdk.StackProps {
     projectName: string,
+    githubRepo: string,
+    githubOwner: string,
     codeArtifactDomain: string,
     codeArtifactRepository: string,
     notificationEmailAddress?: string,
@@ -22,29 +31,75 @@ export interface ProjectCicdStackProps extends cdk.StackProps {
 }
 
 export class ProjectCicdStack extends cdk.Stack {
+
+    private dashedProjectName: string
+    private underScoreProjectName: string
+    private buildIamRole: Role
+
     constructor(scope: cdk.Construct, id: string, props: ProjectCicdStackProps) {
         super(scope, id, props);
 
-        const dashedProjectName = props.projectName.replace(/\s/, '-')
-        const underScoreProjectName = props.projectName.replace(/\s/, '_')
+        this.dashedProjectName = props.projectName.replace(/\s/, '-')
+        this.underScoreProjectName = props.projectName.replace(/\s/, '_')
+        let snsNotificationTopic: Topic
 
-        const artifactBucket = new Bucket(this, 'artifactBucket', {})
+        const mvnSecurityGroup = new SecurityGroup(this, 'efsSecurityGroup', {
+            vpc: props.vpc,
+            description: 'Provides network rules for mvn EFS',
+            allowAllOutbound: true,
+            securityGroupName: 'mvnEFS'
+        })
+        mvnSecurityGroup.addIngressRule(Peer.ipv4(props.vpc.vpcCidrBlock), Port.tcp(2049), 'Allow NFS access')
 
-        const logGroupBuild = LogGroup.fromLogGroupName(this, 'build-log-group', `${dashedProjectName}-build-logGroup`)
-        new LogRetention(this, 'build-log-retention', {
-            logGroupName: logGroupBuild.logGroupName,
-            retention: RetentionDays.FIVE_DAYS
+        const mvnFileSystem = new FileSystem(this, 'mvnFileSystem', {
+            fileSystemName: 'mvnFilesystem',
+            enableAutomaticBackups: false,
+            encrypted: false,
+            vpc: props.vpc,
+            performanceMode: PerformanceMode.GENERAL_PURPOSE,
+            vpcSubnets: {subnets: [props.vpc.privateSubnets[0]]},
+            securityGroup: mvnSecurityGroup
         })
 
-        const logGroupDeployment = LogGroup.fromLogGroupName(this, 'deployment-log-group', `${dashedProjectName}-deployment-logGroup`)
-        new LogRetention(this, 'deployment-log-retention', {
-            logGroupName: logGroupDeployment.logGroupName,
-            retention: RetentionDays.FIVE_DAYS
-        })
+        if (props.notificationEmailAddress) {
+            snsNotificationTopic = new Topic(this, 'buildFailTopic', {
+                displayName: `${this.dashedProjectName}BuildFailedTopic`
+            })
+            snsNotificationTopic.addSubscription(new EmailSubscription(props.notificationEmailAddress))
+        }
 
-        const buildIamRole = new Role(this, 'buildIamRole', {
-            roleName: `${dashedProjectName}BuildRole`,
-            description: `Provides permissions to build for code build to build${dashedProjectName}`,
+        this.createBuildIamRole(props)
+
+        const secret = new Secret(this, 'deployment_secrets', { 
+            description: "Example secrets for cicd build project",
+            removalPolicy: RemovalPolicy.DESTROY,
+            secretName: "cicd-secrets",
+            generateSecretString: {
+                secretStringTemplate: "{}",
+                generateStringKey: "KUBE_CONFIG"
+            }
+        })
+        secret.grantRead(this.buildIamRole)
+
+        this.createBuildProjects(props, 'build', './cicd/buildspec.yml', undefined, mvnFileSystem, snsNotificationTopic)
+        this.createBuildProjects(props, 'staging-deployment', './cicd/deployspec.yml', {
+            'DEPLOYMENT_ENVIRONMENT': {
+                type: BuildEnvironmentVariableType.PLAINTEXT,
+                value: 'staging'
+            }
+        }, mvnFileSystem, snsNotificationTopic)
+        this.createBuildProjects(props, 'production-deployment', './cicd/deployspec.yml', {
+            'DEPLOYMENT_ENVIRONMENT': {
+                type: BuildEnvironmentVariableType.PLAINTEXT,
+                value: 'production'
+            }
+        }, mvnFileSystem, snsNotificationTopic)
+    }
+
+    private createBuildIamRole(props: ProjectCicdStackProps) {
+        this.buildIamRole = new Role(this, 'buildIamRole', {
+            roleName: `${this.dashedProjectName}BuildRole`,
+            description: `Provides permissions to build for code build to build${this.dashedProjectName}`,
             assumedBy: new ServicePrincipal('codebuild.amazonaws.com', {region: this.region}),
             inlinePolicies: {
                 getRepoToken: new PolicyDocument({
@@ -83,48 +138,54 @@ export class ProjectCicdStack extends cdk.Stack {
                             ],
                             effect: Effect.ALLOW,
                             resources: [`arn:aws:codeartifact:${this.region}:${this.account}:repository/${props.codeArtifactDomain}/${props.codeArtifactRepository}`]
-                        }),
-                        new PolicyStatement({
-                            actions: [
-                                's3:ListBucket'
-                            ],
-                            effect: Effect.ALLOW,
-                            resources: [artifactBucket.bucketArn]
-                        }),
-                        new PolicyStatement({
-                            actions: [
-                                's3:*Object*',
-                            ],
-                            effect: Effect.ALLOW,
-                            resources: [`${artifactBucket.bucketArn}/*`]
                         })],
                 })
             }
         })
+    }
 
-        const mvnSecurityGroup = new SecurityGroup(this, 'efsSecurityGroup', {
-            vpc: props.vpc,
-            description: 'Provides network rules for mvn EFS',
-            allowAllOutbound: true,
-            securityGroupName: 'mvnEFS'
-        })
-        mvnSecurityGroup.addIngressRule(Peer.ipv4(props.vpc.vpcCidrBlock), Port.tcp(2049), 'Allow NFS access')
+    private createBuildProjects(props: ProjectCicdStackProps, prefix: string, buildSpecPath: string, environmentVariables: { [p: string]: BuildEnvironmentVariable }, mvnFileSystem?: FileSystem, snsNotificationTopic?: Topic) {
+        const dashedProjectName = props.projectName.replace(/\s/, '-')
+        const underScoreProjectName = props.projectName.replace(/\s/, '_')
 
-        const mvnFileSystem = new FileSystem(this, 'mvnFileSystem', {
-            fileSystemName: 'mvnFilesystem',
-            enableAutomaticBackups: false,
-            encrypted: false,
-            vpc: props.vpc,
-            performanceMode: PerformanceMode.GENERAL_PURPOSE,
-            vpcSubnets: {subnets: [props.vpc.privateSubnets[0]]},
-            securityGroup: mvnSecurityGroup
+        const logGroupBuild = LogGroup.fromLogGroupName(this, `${prefix}-log-group`, `${dashedProjectName}-${prefix}-logGroup`)
+        new LogRetention(this, `${prefix}-build-log-retention`, {
+            logGroupName: logGroupBuild.logGroupName,
+            retention: RetentionDays.FIVE_DAYS
         })
 
-        const buildPipeline = new PipelineProject(this, 'build-pipeline', {
-            projectName: `${underScoreProjectName}_build`,
-            description: `${dashedProjectName} Build Pipeline`,
-            buildSpec: BuildSpec.fromSourceFilename('./cicd/buildspec.yml'),
-            role: buildIamRole,
+        const fileSystemLocations = mvnFileSystem ? [FileSystemLocation.efs({
+            identifier: 'mvnHome',
+            mountPoint: '/mnt',
+            location: `${mvnFileSystem.fileSystemId}.efs.${this.region}.amazonaws.com:/`
+        })] : []
+
+        const artifactBucket = new Bucket(this, `${prefix}-pipeline-bucket`, {
+            versioned: false,
+            bucketName: `${prefix}-${dashedProjectName}`,
+            autoDeleteObjects: true,
+            encryption: BucketEncryption.S3_MANAGED,
+            publicReadAccess: false,
+            blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+            removalPolicy: RemovalPolicy.DESTROY
+        });
+
+        const project = new Project(this, `${prefix}-pipeline`, {
+            projectName: `${underScoreProjectName}_${prefix.toLowerCase()}`,
+            description: `${dashedProjectName} ${prefix} Pipeline`,
+            buildSpec: BuildSpec.fromSourceFilename(buildSpecPath),
+            source: Source.gitHub({
+                webhook: prefix === 'build',
+                repo: props.githubRepo,
+                owner: props.githubOwner
+            }),
+             artifacts: Artifacts.s3({
+                  bucket: artifactBucket,
+                  includeBuildId: true,
+                  packageZip: false,
+                }),
+            role: this.buildIamRole,
+            environmentVariables,
             environment: {
                 buildImage: LinuxBuildImage.STANDARD_5_0,
                 privileged: true,
@@ -137,145 +198,16 @@ export class ProjectCicdStack extends cdk.Stack {
                     logGroup: logGroupBuild
                 }
             },
-            fileSystemLocations: [FileSystemLocation.efs({
-                identifier: 'mvnHome',
-                mountPoint: '/mnt',
-                location: `${mvnFileSystem.fileSystemId}.efs.${this.region}.amazonaws.com:/`
-            })],
+            fileSystemLocations,
             vpc: props.vpc,
             subnetSelection: {subnets: [props.vpc.privateSubnets[0]]},
             timeout: Duration.minutes(20),
-            queuedTimeout: Duration.minutes(10)
-        })
-
-        const deploymentPipeline = new PipelineProject(this, 'deployment-pipeline', {
-            projectName: `${underScoreProjectName}_deployment`,
-            description: `${dashedProjectName} Deployment Pipeline`,
-            buildSpec: BuildSpec.fromSourceFilename('./cicd/deployspec.yml'),
-            role: buildIamRole,
-            environment: {
-                buildImage: LinuxBuildImage.STANDARD_5_0,
-                privileged: true,
-                computeType: ComputeType.SMALL
-            },
-            logging: {
-                cloudWatch: {
-                    enabled: true,
-                    prefix: `${dashedProjectName}`,
-                    logGroup: logGroupDeployment
-                }
-            },
-            vpc: props.vpc,
-            subnetSelection: {subnets: [props.vpc.privateSubnets[0]]},
-            timeout: Duration.minutes(20),
-            queuedTimeout: Duration.minutes(10)
+            queuedTimeout: Duration.minutes(10),
+            grantReportGroupPermissions: true
         })
 
         if (props.notificationEmailAddress) {
-            const snsNotificationTopic = new Topic(this, 'buildFailTopic', {
-                displayName: `${dashedProjectName}BuildFailedTopic`
-            })
-            snsNotificationTopic.addSubscription(new EmailSubscription(props.notificationEmailAddress))
-            buildPipeline.notifyOnBuildFailed('triggerFailedBuild', snsNotificationTopic)
-            deploymentPipeline.notifyOnBuildFailed('triggerFailedDeployment', snsNotificationTopic)
+            project.notifyOnBuildFailed(`triggerFailedBuild${prefix}`, snsNotificationTopic)
         }
-
-        const bitbucketConnection = new CfnConnection(this, 'bitbucketConnection', {
-            connectionName: `${dashedProjectName}`,
-            providerType: 'Bitbucket'
-        })
-
-        const buildPipelineRole = new Role(this, 'pipelineIamRole', {
-            roleName: `CodePipelineRole`,
-            description: `Provides permissions for running code pipelines`,
-            assumedBy: new ServicePrincipal('codepipeline.amazonaws.com'),
-            inlinePolicies: {
-                codestarConnectionPolicy: new PolicyDocument({
-                    statements: [new PolicyStatement({
-                        actions: [
-                            'codestar-connections:GetConnection',
-                            'codestar-connections:UseConnection',
-                            'codestar-connections:PassConnection'
-                        ],
-                        resources: [
-                            bitbucketConnection.attrConnectionArn
-                        ],
-
-                    })]
-                })
-            },
-            managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('AWSCodePipelineFullAccess'),
-                ManagedPolicy.fromAwsManagedPolicyName('AWSCodeCommitFullAccess'),
-                ManagedPolicy.fromAwsManagedPolicyName('AWSCodeBuildDeveloperAccess'),
-                ManagedPolicy.fromAwsManagedPolicyName('AmazonS3FullAccess')],
-            path: '/'
-        })
-
-        const pipelineCreationLambdaRole = new Role(this, 'pipelineCreationLambdaRole', {
-            roleName: `PipelineCreationLambdaRole`,
-            description: `Provides permissions for creating a code pipeline`,
-            assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
-            inlinePolicies: {
-                codestarConnectionPolicy: new PolicyDocument({
-                    statements: [new PolicyStatement({
-                        actions: [
-                            'codestar-connections:GetConnection',
-                            'codestar-connections:ListConnections',
-                            'codestar-connections:PassConnection'
-                        ],
-                        resources: [
-                            bitbucketConnection.attrConnectionArn
-                        ],
-
-                    })]
-                })
-            },
-            managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('AWSLambda_FullAccess'),
-                ManagedPolicy.fromAwsManagedPolicyName('AWSCloudFormationFullAccess'),
-                ManagedPolicy.fromAwsManagedPolicyName('AWSCodePipelineFullAccess'),
-                ManagedPolicy.fromManagedPolicyArn(this, 'AWSLambdaBasicExecutionRole', 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole')],
-            path: '/'
-        })
-
-
-        const pipelineCreationLambda = new NodejsFunction(this, 'pipelineCreationLambda', {
-            functionName: 'PipelineCreation',
-            description: 'Creates CodePipelines if new git branches are created',
-            role: pipelineCreationLambdaRole,
-            awsSdkConnectionReuse: true,
-            environment: {
-                CONNECTION_ARN: bitbucketConnection.attrConnectionArn,
-                PIPELINE_ROLE_ARN: buildPipelineRole.roleArn,
-                S3_BUCKET_ARTIFACT_STORE: artifactBucket.bucketName,
-                BUILD_PROJECT_NAME: buildPipeline.projectName,
-                DEPLOYMENT_PROJECT_NAME: deploymentPipeline.projectName
-            },
-            entry: path.join(__dirname, '../resources/pipeline-creation-lambda/index.ts'),
-            handler: 'main',
-            bundling: {
-                minify: true,
-                externalModules: ['aws-sdk'],
-                forceDockerBundling: true,
-                commandHooks: {
-                    beforeInstall(inputDir: string, outputDir: string): string[] {
-                        return []
-                    },
-                    beforeBundling(inputDir: string, outputDir: string): string[] {
-                        return []
-                    },
-                    afterBundling(inputDir: string, outputDir: string): string[] {
-                        return [`cp ${inputDir}/resources/pipeline-creation-lambda/cloudformation/codepipeline.template.yaml ${outputDir}`];
-                    }
-                }
-            },
-            logRetention: RetentionDays.FIVE_DAYS,
-            timeout: Duration.minutes(3)
-        })
-
-        const lambdaApiGateway = new LambdaRestApi(this, 'webhookApi', {
-            restApiName: 'WebhookApi',
-            handler: pipelineCreationLambda,
-            deploy: true
-        })
     }
 }
